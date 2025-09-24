@@ -14,9 +14,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # アプリコードをコピー
-COPY main.py ./
+COPY src ./src
 
 # FastAPIを8081ポートで起動
 EXPOSE 8081
 ENV PYTHONUNBUFFERED=1
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8081"]
+CMD ["uvicorn", "src.app.main:app", "--host", "0.0.0.0", "--port", "8081"]
