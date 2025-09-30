@@ -1,57 +1,45 @@
 import os
-import shutil
-import tempfile
-from typing import List, Optional
+import uuid
+from datetime import datetime
 
 import ffmpeg
 import requests
 from fastapi import APIRouter, HTTPException
-from google.cloud import speech
+from google.cloud import speech, storage
 from pydantic import BaseModel
 
 router = APIRouter()
 
 
 # ====== I/O Models ======
-# リクエストボディの型
-class TranscribeReq(BaseModel):
-    audio_url: str
-
-
-# デバッグ用
-class RequestEcho(BaseModel):
+class TranscriptionRequest(BaseModel):
+    episodeId: str
     audioUrl: str
 
 
-# 全文レベルの結果
-class ResultSummary(BaseModel):
-    text: str
-    confidence: Optional[float] = None
+BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "start-fm-audio")
 
 
-# セグメントレベルの結果
-class Segment(BaseModel):
-    startSec: Optional[float] = None
-    endSec: Optional[float] = None
-    speaker: Optional[str] = None
-    text: str
-    confidence: Optional[float] = None
+# GCSに保存する
+def save_audio_to_gcs(audio_url: str, episode_id: str) -> str:
+    # 1. 音声をダウンロード
+    resp = requests.get(audio_url, stream=True)
+    # ダウンロード失敗時は例外を投げる
+    resp.raise_for_status()
+    # GCSの保存パスを決定
+    today = datetime.utcnow().strftime("%Y/%m/%d")
+    object_name = f"uploads/{episode_id}.mp3"
+    gcs_uri = f"gs://{BUCKET_NAME}/{object_name}"
 
+    # 3. GCSにアップロード
+    client = storage.Client()
+    bucket = client.bucket(BUCKET_NAME)
+    blob = bucket.blob(object_name)
 
-# メタ情報
-class MetaInfo(BaseModel):
-    jobId: Optional[str] = None
-    engine: str
+    # resp.raw はファイルライクオブジェクトなのでそのまま渡せる
+    blob.upload_from_file(resp.raw, content_type="audio/mpeg")
 
-
-# レスポンスボディの型
-class TranscribeResp(BaseModel):
-    version: str = "1.0"
-    request: RequestEcho
-    result: ResultSummary
-    segments: List[Segment]
-    words: Optional[List[dict]] = None
-    meta: MetaInfo
+    return gcs_uri
 
 
 # Google STT が処理できる LINEAR16/16kHz/WAV に変換する
@@ -68,80 +56,37 @@ def to_linear16_wav(src_path: str, dst_path: str):
 
 
 @router.post("/transcribe")
-def transcribe(req: TranscribeReq):
-    tmp = tempfile.mkdtemp(prefix="startfm_")
-    src = os.path.join(tmp, "src.audio")  # 元ファイル（一時）
-    wav = os.path.join(tmp, "src.wav")  # 変換後ファイル（一時）
-    try:
-        # --- 1) ダウンロード ---
-        try:
-            with requests.get(req.audio_url, stream=True, timeout=30) as r:
-                r.raise_for_status()
-                with open(src, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-        except requests.RequestException as e:
-            raise HTTPException(status_code=400, detail=f"download failed: {e}")
+def transcribe(req: TranscriptionRequest):
+    gcs_uri = save_audio_to_gcs(req.audioUrl, req.episodeId)
+    client = speech.SpeechClient()
+    audio = speech.RecognitionAudio(uri=gcs_uri)
+    config = speech.RecognitionConfig(
+        encoding=speech.RecognitionConfig.AudioEncoding.MP3,
+        language_code="ja-JP",  # 言語を日本語に設定
+        enable_automatic_punctuation=True,
+    )
+    operation = client.long_running_recognize(config=config, audio=audio)
+    transcription_id = str(uuid.uuid4())
+    job_json = {
+        "version": "1.0",
+        "episodeId": req.episodeId,
+        "audioUrl": req.audioUrl,
+        "gcsUri": gcs_uri,
+        "operationName": operation.operation.name,
+        "status": "RUNNING",
+        "engine": "google-stt:v1",
+        "startedAt": datetime.utcnow().isoformat() + "Z",
+    }
 
-        # --- 2) 変換 ---
-        to_linear16_wav(src, wav)
+    from google.cloud import storage
 
-        # --- 3) Google STT（同期）---
-        try:
-            client = speech.SpeechClient()
-        except Exception as e:
-            # 環境変数/認証鍵の不備など
-            raise HTTPException(
-                status_code=500, detail=f"SpeechClient init failed: {e}"
-            )
-        with open(wav, "rb") as f:
-            content = f.read()
-            audio = speech.RecognitionAudio(content=content)
-            config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=16000,
-                language_code="ja-JP",
-                enable_automatic_punctuation=True,
-            )
+    bucket_name = "start-fm-audio"
+    client_storage = storage.Client()
+    bucket = client_storage.bucket(bucket_name)
+    blob = bucket.blob(f"transcriptions/{transcription_id}.json")
+    blob.upload_from_string(
+        data=str(job_json),
+        content_type="application/json",
+    )
 
-        try:
-            stt_resp = client.recognize(config=config, audio=audio)
-        except Exception as e:
-            # STT バックエンド側のエラーは 502 相当で扱う
-            raise HTTPException(status_code=502, detail=f"STT recognize failed: {e}")
-
-        # --- 4) レスポンス整形 ---
-        alts = [r.alternatives[0] for r in stt_resp.results if r.alternatives]
-        full_text = " ".join(a.transcript for a in alts).strip()
-        confidences = [
-            a.confidence
-            for a in alts
-            if getattr(a, "confidence", None) not in (None, 0.0)
-        ]
-        avg_conf = (
-            round(sum(confidences) / len(confidences), 4) if confidences else None
-        )
-
-        # --- 5) レスポンス構築（新スキーマ）---
-        request_echo = RequestEcho(
-            audioUrl=req.audio_url,
-        )
-        result = ResultSummary(
-            text=full_text,
-            confidence=avg_conf,
-        )
-        segments: List[Segment] = []
-        meta = MetaInfo(
-            jobId=None,
-            engine="google-stt:v1",
-        )
-
-        return TranscribeResp(
-            request=request_echo,
-            result=result,
-            segments=segments,
-            meta=meta,
-        )
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    return {"transcriptionId": transcription_id, "status": "RUNNING"}
