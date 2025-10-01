@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import List
@@ -102,15 +103,28 @@ async def ocr_text(
         # 日本語OCRを実行
         text = pytesseract.image_to_string(img, lang="jpn").strip()
         if text:
-            results.append({"frame": f.name, "text": text})
+            results.append({"frame": f.name, "text": re.sub(r"\s+", "", text).strip()})
+
+    seen = set()
+    data = []
+    pattern = re.compile(
+        r"(\d{2}:\d{2})・[話語]者(\d+)(.*?)(?=\d{2}:\d{2}・[話語]者\d+|$)", re.DOTALL
+    )
+
+    for item in results:
+        for match in pattern.finditer(item["text"]):
+            time, speaker_id, body = match.groups()
+            key = (time, speaker_id)
+            if key not in seen:
+                seen.add(key)
+                text = re.sub(r"\s+", " ", body).strip()
+                data.append({"time": time, "speaker": int(speaker_id), "text": text})
 
     if not results:
         raise HTTPException(status_code=422, detail="OCR結果が空でした")
     return JSONResponse(
         content={
             "job_id": job_id,
-            "count": len(results),
-            "fps": fps,
-            "items": results,
+            "data": data,
         }
     )
