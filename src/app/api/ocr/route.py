@@ -4,10 +4,13 @@ from pathlib import Path
 from typing import List
 
 import ffmpeg
+import pytesseract
 import requests
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from app.api.ocr.preprocess import preprocess
 
 router = APIRouter()
 
@@ -19,13 +22,13 @@ class Request(BaseModel):
 
 OUTPUT_ROOT = Path(os.environ.get("OUTPUT_DIR", "./out")).resolve()
 OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+fps = 4
 
 
-@router.post("/ocr_capture")
+@router.post("/ocr/capture")
 async def ocr_endpoint(request: Request):
     file_url = request.file_url
     episode_id = request.episode_id
-    fps = 4
     suffix = ".mp4"
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -76,3 +79,35 @@ async def ocr_endpoint(request: Request):
         ),
     }
     return JSONResponse(content=payload)
+
+
+@router.post("/ocr/text")
+async def ocr_text(
+    job_id: str,
+):
+    frames_dir = OUTPUT_ROOT / job_id / "frames"
+    if not frames_dir.exists():
+        raise HTTPException(
+            status_code=404, detail=f"frames dir not found: {frames_dir}"
+        )
+    frames: List[Path] = sorted(frames_dir.glob("frame_*.png"))
+    if not frames:
+        raise HTTPException(status_code=404, detail="no frames in the job")
+
+    results = []
+    for f in frames:
+        img = preprocess(f)
+        text = pytesseract.image_to_string(img, lang="jpn").strip()
+        if text:
+            results.append({"frame": f.name, "text": text})
+
+    if not results:
+        raise HTTPException(status_code=422, detail="OCR結果が空でした")
+    return JSONResponse(
+        content={
+            "job_id": job_id,
+            "count": len(results),
+            "fps": fps,
+            "items": results,
+        }
+    )

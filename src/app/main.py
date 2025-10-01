@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from src.app.api.ocr import router as ocr_router
+from src.app.api.ocr.route import router as ocr_router
 from src.app.api.transcribe import router as transcribe_router
 
 app = FastAPI()

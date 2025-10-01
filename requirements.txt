@@ -6,3 +6,8 @@ requests
 google-cloud-speech
 google-cloud-storage
 google-auth
+
+# OCR
+pytesseract
+numpy
+Pillow

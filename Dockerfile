@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr tesseract-ocr-jpn \
+ && rm -rf /var/lib/apt/lists/*
+
 # アプリ実行用の作業ディレクトリ
 WORKDIR /app
 
