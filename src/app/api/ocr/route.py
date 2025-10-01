@@ -25,6 +25,7 @@ OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
 fps = 4
 
 
+# 動画URLを受け取り、フレームを抽出して画像として保存するエンドポイント
 @router.post("/ocr/capture")
 async def ocr_endpoint(request: Request):
     file_url = request.file_url
@@ -96,7 +97,9 @@ async def ocr_text(
 
     results = []
     for f in frames:
+        # OCRの精度向上のために前処理を行う
         img = preprocess(f)
+        # 日本語OCRを実行
         text = pytesseract.image_to_string(img, lang="jpn").strip()
         if text:
             results.append({"frame": f.name, "text": text})
