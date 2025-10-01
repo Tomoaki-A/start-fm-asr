@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.app.api.ocr.preprocess import preprocess
+from src.app.api.ocr.text import create_object
 
 router = APIRouter()
 
@@ -105,27 +106,7 @@ async def ocr_text(
         if text:
             results.append({"frame": f.name, "text": re.sub(r"\s+", "", text).strip()})
 
-    seen = set()
-    data = []
-    pattern = re.compile(
-        r"(\d{2}:\d{2})・[話語]者(\d+)(.*?)(?=\d{2}:\d{2}・[話語]者\d+|$)", re.DOTALL
-    )
-
-    for item in results:
-        for match in pattern.finditer(item["text"]):
-            time, speaker_id, body = match.groups()
-            key = (time, speaker_id)
-            if key not in seen:
-                seen.add(key)
-                text = re.sub(r"\s+", " ", body).strip()
-                data.append(
-                    {
-                        "time": time,
-                        "speaker": int(speaker_id),
-                        "text": re.sub(r"\d{2}:\d{2}", "", text),
-                    }
-                )
-
+    data = create_object(results)
     if not results:
         raise HTTPException(status_code=422, detail="OCR結果が空でした")
     return JSONResponse(
