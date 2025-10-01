@@ -1,20 +1,25 @@
 from pathlib import Path
+from typing import Union
 
+import cv2
 import numpy
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image
+
+
+def debug(
+    img: numpy.ndarray, step_name: str, debug_dir: Union[str, Path] = "debug_out"
+) -> None:
+    debug_dir = Path(debug_dir)
+    debug_dir.mkdir(exist_ok=True, parents=True)
+    out_path = debug_dir / f"{step_name}.png"
+    cv2.imwrite(str(out_path), img)
+    print(f"[debug] {step_name}: {out_path}")
 
 
 def preprocess(img_path: Path) -> Image.Image:
-    im = Image.open(img_path).convert("L")  # グレースケール
-    im = ImageOps.autocontrast(im)  # 自動コントラスト
-    im = im.filter(ImageFilter.MedianFilter(size=3))  # ノイズ軽減
+    im = Image.open(img_path)
+    # debug(numpy.array(im), "01_original")
 
-    threshold = 175
-    lut = [0 if i <= threshold else 255 for i in range(256)]  # 0-255のテーブル
-    im = im.point(lut)  # ← lambdaではなくLUTを渡す
-
-    # TesseractはL(8bit)か二値(1bit)どちらでもOK。二値にしたいなら:
-    # im = im.point(lut, mode="1").convert("L")
     return im
 
 

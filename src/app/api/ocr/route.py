@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.api.ocr.preprocess import preprocess
+from src.app.api.ocr.preprocess import preprocess
 
 router = APIRouter()
 
