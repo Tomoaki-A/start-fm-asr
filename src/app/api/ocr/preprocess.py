@@ -18,8 +18,6 @@ def preprocess(img_path: Path) -> Image.Image:
     im = crop_and_mask_ui(im)
     im = unify_black_and_white_text(im)
 
-    debug(numpy.array(im), img_path.stem + "_original")
-
     return im
 
 

@@ -118,7 +118,13 @@ async def ocr_text(
             if key not in seen:
                 seen.add(key)
                 text = re.sub(r"\s+", " ", body).strip()
-                data.append({"time": time, "speaker": int(speaker_id), "text": text})
+                data.append(
+                    {
+                        "time": time,
+                        "speaker": int(speaker_id),
+                        "text": re.sub(r"\d{2}:\d{2}", "", text),
+                    }
+                )
 
     if not results:
         raise HTTPException(status_code=422, detail="OCR結果が空でした")
